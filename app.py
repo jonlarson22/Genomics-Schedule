@@ -107,12 +107,13 @@ if uploaded_file is not None:
                         "override": override_val
                     })
                     
-            x = {}
+           x = {}
             for worker in active_worker_names:
                 for task in task_instances:
-                    # Check if trained (or if manually overridden to them)
-                    # Use get to default to 0 in case a task is missing from the skills matrix
-                    is_trained = skills_df.get(task["name"], pd.Series(dtype=int)).get(worker, 0) == 1
+                    # Look up the skill, default to False if missing.
+                    # This safely handles Excel checkboxes (True), text ("TRUE"), or numbers (1).
+                    skill_val = skills_df.get(task["name"], pd.Series()).get(worker, False)
+                    is_trained = skill_val in [True, 1, "TRUE", "True"]
                     
                     if is_trained or task["override"] == worker:
                         x[(worker, task["id"])] = model.NewBoolVar(f"assign_{worker}_{task['id']}")
