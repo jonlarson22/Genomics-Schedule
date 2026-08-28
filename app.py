@@ -121,7 +121,7 @@ if uploaded_file is not None:
                     if is_trained or task["override"] == worker:
                         x[(worker, task["id"])] = model.NewBoolVar(f"assign_{worker}_{task['id']}")
                         
-            # Constraint 1: One person per task
+# --- Constraint 1: One person per task ---
             for task in task_instances:
                 valid_workers = [w for w in active_worker_names if (w, task["id"]) in x]
                 if task["override"] and task["override"] in valid_workers:
@@ -130,10 +130,12 @@ if uploaded_file is not None:
                         if w != task["override"]:
                             model.Add(x[(w, task["id"])] == 0)
                 else:
-                    model.AddExactlyOne(x[(w, task["id"])] for w in valid_workers) if valid_workers else None
+                    if valid_workers:
+                        model.AddExactlyOne(x[(w, task["id"])] for w in valid_workers)
 
-            # Constraint 2: 100% Capacity Limit & 80% Penalty Setup
+            # --- Constraint 2: Capacity & Balanced Distribution ---
             objective_terms = []
+            worker_total_mins = {}
             
             for worker in active_worker_names:
                 assigned_mins = []
@@ -143,6 +145,7 @@ if uploaded_file is not None:
                 
                 if assigned_mins:
                     total_assigned = sum(assigned_mins)
+                    worker_total_mins[worker] = total_assigned
                     hard_limit = worker_limits[worker]["hard"]
                     target_limit = worker_limits[worker]["target"]
                     
@@ -152,11 +155,23 @@ if uploaded_file is not None:
                     # SOFT LIMIT PENALTY: Calculate minutes over 80%
                     over_target = model.NewIntVar(0, hard_limit, f"over_{worker}")
                     model.Add(over_target >= total_assigned - target_limit)
-                    
-                    # Penalize going over 80% (Subtract 1 point per minute over)
-                    objective_terms.append(-over_target)
-                    
-            # Points for completing tasks (1000 for Priority, 100 for Normal)
+                    objective_terms.append(-2 * over_target) # Heavier penalty for overload
+
+            # WORKLOAD BALANCING: Minimize variance/spread between workers' total minutes
+            if len(active_worker_names) > 1:
+                max_mins = model.NewIntVar(0, 1440, "max_load")
+                min_mins = model.NewIntVar(0, 1440, "min_load")
+                
+                load_vars = list(worker_total_mins.values())
+                if load_vars:
+                    model.AddMaxEquality(max_mins, load_vars)
+                    model.AddMinEquality(min_mins, load_vars)
+                    # Penalize the gap between the most-loaded and least-loaded worker
+                    load_spread = model.NewIntVar(0, 1440, "load_spread")
+                    model.Add(load_spread == max_mins - min_mins)
+                    objective_terms.append(-5 * load_spread) # Weight to encourage even sharing
+
+            # Points for completing tasks (Priority vs Normal)
             for worker in active_worker_names:
                 for task in task_instances:
                     if (worker, task["id"]) in x:
@@ -183,14 +198,31 @@ if uploaded_file is not None:
                 
                 if results:
                     results_df = pd.DataFrame(results)
-                    for worker in active_worker_names:
+                    
+                    # Clean Layout: Use columns or metrics instead of endless vertical scrolling
+                    st.markdown("### 📊 Shift Summary Dashboard")
+                    metric_cols = st.columns(len(active_worker_names))
+                    
+                    for idx, worker in enumerate(active_worker_names):
                         worker_tasks = results_df[results_df["Worker"] == worker]
-                        if not worker_tasks.empty:
-                            total_hrs = worker_tasks["Duration (Hrs)"].sum()
-                            utilization = int((total_hrs / (worker_limits[worker]["hard"] / 60)) * 100)
-                            
-                            st.markdown(f"### 🧑‍🔬 {worker} — {total_hrs} hrs assigned ({utilization}% capacity)")
-                            st.table(worker_tasks[["Assigned Task", "Duration (Hrs)"]])
+                        total_hrs = worker_tasks["Duration (Hrs)"].sum() if not worker_tasks.empty else 0
+                        utilization = int((total_hrs / (worker_limits[worker]["hard"] / 60)) * 100) if worker_limits[worker]["hard"] > 0 else 0
+                        
+                        with metric_cols[idx]:
+                            st.metric(label=worker, value=f"{total_hrs} hrs", delta=f"{utilization}% capacity")
+                    
+                    st.markdown("---")
+                    st.markdown("### 📋 Individual Task Breakdown")
+                    
+                    # Use tabs to organize individual views compactly
+                    worker_tabs = st.tabs(active_worker_names)
+                    for idx, worker in enumerate(active_worker_names):
+                        with worker_tabs[idx]:
+                            worker_tasks = results_df[results_df["Worker"] == worker]
+                            if not worker_tasks.empty:
+                                st.dataframe(worker_tasks[["Assigned Task", "Duration (Hrs)"]], hide_index=True, use_container_width=True)
+                            else:
+                                st.info("No tasks assigned for this shift.")
                 else:
                     st.warning("No tasks could be assigned.")
             else:
