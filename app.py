@@ -107,7 +107,7 @@ if uploaded_file is not None:
                         "override": override_val
                     })
                     
-           x = {}
+            x = {}
             for worker in active_worker_names:
                 for task in task_instances:
                     # Look up the skill, default to False if missing.
