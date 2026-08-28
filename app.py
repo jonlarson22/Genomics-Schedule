@@ -95,10 +95,13 @@ if uploaded_file is not None:
             task_instances = []
             for _, row in edited_tasks.iterrows():
                 qty = int(row["Default_Quantity"])
+                
+                # Safely check for override column existence
+                override_val = None
+                if "Assigned_To" in edited_tasks.columns and pd.notna(row["Assigned_To"]):
+                    override_val = row["Assigned_To"]
+                
                 for i in range(qty):
-                    # Handle cases where Assigned_To might be NaN (empty in Excel)
-                    override_val = row["Assigned_To"] if pd.notna(row["Assigned_To"]) else None
-                    
                     task_instances.append({
                         "id": f"{row['Task_Name']} #{i+1}",
                         "name": row['Task_Name'],
