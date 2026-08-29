@@ -49,11 +49,13 @@ if uploaded_file is not None:
             tasks_df,
             column_config={
                 "Assigned_To": st.column_config.SelectboxColumn("Manual Override", options=worker_names),
+                "Override_Quantity": st.column_config.NumberColumn("Override Qty", min_value=0, step=1), # NEW COLUMN
                 "Priority": st.column_config.CheckboxColumn("Priority"),
                 "Duration_Hours": st.column_config.NumberColumn("Hours/Task", min_value=0.1, step=0.1),
                 "Default_Quantity": st.column_config.NumberColumn("Quantity Needed", min_value=0, step=1)
             },
-            hide_index=True, key="task_editor", use_container_width=True
+            hide_index=True, key="task_editor", use_container_width=True,
+            num_rows="dynamic" # Pro-tip: This allows you to add/delete rows right in the UI!
         )
 
     st.markdown("---")
@@ -94,20 +96,32 @@ if uploaded_file is not None:
             # --- Task Setup ---
             task_instances = []
             for _, row in edited_tasks.iterrows():
-                qty = int(row["Default_Quantity"])
+                total_qty = int(row["Default_Quantity"])
                 
-                # Safely check for override column existence
-                override_val = None
+                # Safely check for override worker
+                override_worker = None
                 if "Assigned_To" in edited_tasks.columns and pd.notna(row["Assigned_To"]):
-                    override_val = row["Assigned_To"]
+                    override_worker = row["Assigned_To"]
                 
-                for i in range(qty):
+                # Safely check for how many should be overridden (default to 0)
+                override_qty = 0
+                if "Override_Quantity" in edited_tasks.columns and pd.notna(row["Override_Quantity"]):
+                    override_qty = int(row["Override_Quantity"])
+                
+                # Failsafe: Ensure we don't try to override more tasks than actually exist
+                override_qty = min(override_qty, total_qty)
+                
+                for i in range(total_qty):
+                    # If we haven't hit the override_qty limit yet, assign to the specific worker.
+                    # Otherwise, leave it as None so the solver can distribute it.
+                    current_override = override_worker if i < override_qty else None
+                    
                     task_instances.append({
                         "id": f"{row['Task_Name']} #{i+1}",
                         "name": row['Task_Name'],
                         "duration_mins": int(row["Duration_Hours"] * 60),
                         "priority": row["Priority"],
-                        "override": override_val
+                        "override": current_override
                     })
                     
             x = {}
