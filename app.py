@@ -61,6 +61,7 @@ if uploaded_file is not None:
     st.markdown("---")
 
     # --- 4. THE OPTIMIZATION SOLVER ---
+    st.write(edited_tasks) # This will print the raw dataframe to the screen
     if st.button("Generate Today's Schedule", type="primary"):
         present_workers = edited_workers[edited_workers["Working_Today?"] == True].copy()
         
