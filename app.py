@@ -19,6 +19,9 @@ if uploaded_file is not None:
     # >>> NEW FIX: Force the empty Assigned_To column to accept text strings <<<
     if "Assigned_To" in tasks_df.columns:
         tasks_df["Assigned_To"] = tasks_df["Assigned_To"].astype("object")
+
+    if "Required_Shift" not in tasks_df.columns:
+        tasks_df["Required_Shift"] = "Any"
     
     # Set the index of the skills matrix to the worker's name for easy lookup
     skills_df.set_index("Worker_Name", inplace=True)
@@ -53,7 +56,8 @@ if uploaded_file is not None:
             tasks_df,
             column_config={
                 "Assigned_To": st.column_config.SelectboxColumn("Manual Override", options=worker_names),
-                "Override_Quantity": st.column_config.NumberColumn("Override Qty", min_value=0, step=1), # NEW COLUMN
+                "Override_Quantity": st.column_config.NumberColumn("Override Qty", min_value=0, step=1),
+                "Required_Shift": st.column_config.SelectboxColumn("Shift", options=["Any", "AM", "PM"]), # NEW
                 "Priority": st.column_config.CheckboxColumn("Priority"),
                 "Duration_Hours": st.column_config.NumberColumn("Hours/Task", min_value=0.1, step=0.1),
                 "Default_Quantity": st.column_config.NumberColumn("Quantity Needed", min_value=0, step=1)
@@ -88,12 +92,18 @@ if uploaded_file is not None:
                 t2 = datetime.strptime(end_str, fmt)
                 total_hours = (t2 - t1).total_seconds() / 3600
                 
+                # Define shift boundaries (You can tweak these hours!)
+                is_am_worker = t1.hour < 12  # Starts before noon
+                is_pm_worker = t2.hour >= 14 # Ends at 2:00 PM or later
+                
                 hard_limit_mins = int(total_hours * 60)
                 target_limit_mins = int(hard_limit_mins * 0.8)
                 
                 worker_limits[row["Worker_Name"]] = {
                     "hard": hard_limit_mins,
-                    "target": target_limit_mins
+                    "target": target_limit_mins,
+                    "is_am": is_am_worker,
+                    "is_pm": is_pm_worker
                 }
                 
             active_worker_names = list(worker_limits.keys())
@@ -126,18 +136,30 @@ if uploaded_file is not None:
                         "name": row['Task_Name'],
                         "duration_mins": int(row["Duration_Hours"] * 60),
                         "priority": row["Priority"],
-                        "override": current_override
+                        "override": current_override,
+                        "required_shift": row.get("Required_Shift", "Any") # NEW
                     })
                     
             x = {}
             for worker in active_worker_names:
                 for task in task_instances:
-                    # Look up the skill, default to False if missing.
-                    # This safely handles Excel checkboxes (True), text ("TRUE"), or numbers (1).
                     skill_val = skills_df.get(task["name"], pd.Series()).get(worker, False)
                     is_trained = skill_val in [True, 1, "TRUE", "True"]
                     
-                    if is_trained or task["override"] == worker:
+                    # --- NEW: Shift Check Logic ---
+                    req_shift = task["required_shift"]
+                    worker_am = worker_limits[worker]["is_am"]
+                    worker_pm = worker_limits[worker]["is_pm"]
+                    
+                    shift_match = True
+                    if req_shift == "AM" and not worker_am:
+                        shift_match = False
+                    if req_shift == "PM" and not worker_pm:
+                        shift_match = False
+                    # ------------------------------
+                    
+                    # Only create the assignment option if they are trained AND match the shift
+                    if (is_trained and shift_match) or task["override"] == worker:
                         x[(worker, task["id"])] = model.NewBoolVar(f"assign_{worker}_{task['id']}")
                         
 # --- Constraint 1: One person per task ---
