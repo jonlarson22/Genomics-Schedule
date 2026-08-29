@@ -16,6 +16,10 @@ if uploaded_file is not None:
     tasks_df = pd.read_excel(uploaded_file, sheet_name="Tasks")
     skills_df = pd.read_excel(uploaded_file, sheet_name="Skills")
     
+    # >>> NEW FIX: Force the empty Assigned_To column to accept text strings <<<
+    if "Assigned_To" in tasks_df.columns:
+        tasks_df["Assigned_To"] = tasks_df["Assigned_To"].astype("object")
+    
     # Set the index of the skills matrix to the worker's name for easy lookup
     skills_df.set_index("Worker_Name", inplace=True)
     worker_names = workers_df["Worker_Name"].tolist()
