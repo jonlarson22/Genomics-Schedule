@@ -27,6 +27,16 @@ if uploaded_file is not None:
     skills_df.set_index("Worker_Name", inplace=True)
     worker_names = workers_df["Worker_Name"].tolist()
 
+def color_categories(row):
+    cat = row.get("Category", "")
+    # Soft background colors with dark text for readability
+    color_map = {
+        "Sample processing": "background-color: #d0e1fd; color: #000;",  # Blue
+        "Quality": "background-color: #fef3c7; color: #000;",            # Yellow
+        "Maintenance": "background-color: #f3e8ff; color: #000;"         # Purple
+    }
+    return [color_map.get(cat, "")] * len(row)
+    
     # --- 2. TOP CONTROLS ---
     st.markdown("---")
     days_of_week = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -112,31 +122,30 @@ if uploaded_file is not None:
             for _, row in edited_tasks.iterrows():
                 total_qty = int(row["Default_Quantity"])
                 
-                # Safely check for override worker
                 override_worker = None
                 if "Assigned_To" in edited_tasks.columns and pd.notna(row["Assigned_To"]):
                     override_worker = row["Assigned_To"]
                 
-                # Safely check for how many should be overridden (default to 0)
                 override_qty = 0
                 if "Override_Quantity" in edited_tasks.columns and pd.notna(row["Override_Quantity"]):
                     override_qty = int(row["Override_Quantity"])
                 
-                # Failsafe: Ensure we don't try to override more tasks than actually exist
                 override_qty = min(override_qty, total_qty)
                 
+                # Grab the category if it exists, otherwise default to "General"
+                task_category = row.get("Category", "General")
+                
                 for i in range(total_qty):
-                    # If we haven't hit the override_qty limit yet, assign to the specific worker.
-                    # Otherwise, leave it as None so the solver can distribute it.
                     current_override = override_worker if i < override_qty else None
                     
                     task_instances.append({
                         "id": f"{row['Task_Name']} #{i+1}",
                         "name": row['Task_Name'],
+                        "category": task_category, # NEW
                         "duration_mins": int(row["Duration_Hours"] * 60),
                         "priority": row["Priority"],
                         "override": current_override,
-                        "required_shift": row.get("Required_Shift", "Any") # NEW
+                        "required_shift": row.get("Required_Shift", "Any")
                     })
                     
             x = {}
@@ -233,6 +242,7 @@ if uploaded_file is not None:
                             results.append({
                                 "Worker": worker,
                                 "Assigned Task": task["name"],
+                                "Category": task["category"], # NEW
                                 "Duration (Hrs)": task["duration_mins"] / 60
                             })
                 
@@ -260,7 +270,9 @@ if uploaded_file is not None:
                         with worker_tabs[idx]:
                             worker_tasks = results_df[results_df["Worker"] == worker]
                             if not worker_tasks.empty:
-                                st.dataframe(worker_tasks[["Assigned Task", "Duration (Hrs)"]], hide_index=True, use_container_width=True)
+                                # Apply the color-coding style to the dataframe view
+                                styled_table = worker_tasks[["Assigned Task", "Category", "Duration (Hrs)"]].style.apply(color_categories, axis=1)
+                                st.dataframe(styled_table, hide_index=True, use_container_width=True)
                             else:
                                 st.info("No tasks assigned for this shift.")
                 else:
