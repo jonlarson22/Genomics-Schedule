@@ -6,6 +6,17 @@ from ortools.sat.python import cp_model
 st.set_page_config(page_title="Genomics Task Scheduler", layout="wide")
 st.title("Daily Shift & Task Scheduler")
 
+# --- HELPER FUNCTIONS ---
+def color_categories(row):
+    cat = row.get("Category", "")
+    # Soft background colors with dark text for readability
+    color_map = {
+        "Sample processing": "background-color: #d0e1fd; color: #000;",  # Blue
+        "Quality": "background-color: #fef3c7; color: #000;",            # Yellow
+        "Maintenance": "background-color: #f3e8ff; color: #000;"         # Purple
+    }
+    return [color_map.get(cat, "")] * len(row)
+
 # --- 1. DATA UPLOAD ---
 st.markdown("### Upload Master Schedule Data")
 uploaded_file = st.file_uploader("Upload your master Excel file with Workers, Tasks, and Skills tabs", type=["xlsx"])
@@ -16,7 +27,7 @@ if uploaded_file is not None:
     tasks_df = pd.read_excel(uploaded_file, sheet_name="Tasks")
     skills_df = pd.read_excel(uploaded_file, sheet_name="Skills")
     
-    # >>> NEW FIX: Force the empty Assigned_To column to accept text strings <<<
+    # Force the empty Assigned_To column to accept text strings
     if "Assigned_To" in tasks_df.columns:
         tasks_df["Assigned_To"] = tasks_df["Assigned_To"].astype("object")
 
@@ -27,23 +38,13 @@ if uploaded_file is not None:
     skills_df.set_index("Worker_Name", inplace=True)
     worker_names = workers_df["Worker_Name"].tolist()
 
-def color_categories(row):
-    cat = row.get("Category", "")
-    # Soft background colors with dark text for readability
-    color_map = {
-        "Sample processing": "background-color: #d0e1fd; color: #000;",  # Blue
-        "Quality": "background-color: #fef3c7; color: #000;",            # Yellow
-        "Maintenance": "background-color: #f3e8ff; color: #000;"         # Purple
-    }
-    return [color_map.get(cat, "")] * len(row)
-    
     # --- 2. TOP CONTROLS ---
     st.markdown("---")
     days_of_week = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     current_day = datetime.now().strftime("%a") 
     selected_day = st.selectbox("Select Day of the Week", days_of_week, index=days_of_week.index(current_day) if current_day in days_of_week else 0)
 
-    # Look at the specific day's column (e.g., "Tue") in the Excel sheet to auto-check the roster
+    # Look at the specific day's column in Excel sheet to auto-check the roster
     if selected_day in workers_df.columns:
         workers_df["Working_Today?"] = workers_df[selected_day] == True
     else:
@@ -67,13 +68,13 @@ def color_categories(row):
             column_config={
                 "Assigned_To": st.column_config.SelectboxColumn("Manual Override", options=worker_names),
                 "Override_Quantity": st.column_config.NumberColumn("Override Qty", min_value=0, step=1),
-                "Required_Shift": st.column_config.SelectboxColumn("Shift", options=["Any", "AM", "PM"]), # NEW
+                "Required_Shift": st.column_config.SelectboxColumn("Shift", options=["Any", "AM", "PM"]),
                 "Priority": st.column_config.CheckboxColumn("Priority"),
                 "Duration_Hours": st.column_config.NumberColumn("Hours/Task", min_value=0.1, step=0.1),
                 "Default_Quantity": st.column_config.NumberColumn("Quantity Needed", min_value=0, step=1)
             },
             hide_index=True, key="task_editor", use_container_width=True,
-            num_rows="dynamic" # Pro-tip: This allows you to add/delete rows right in the UI!
+            num_rows="dynamic"
         )
 
     st.markdown("---")
@@ -90,18 +91,15 @@ def color_categories(row):
             # --- Capacity Setup (Hard 100% Limit, Soft 80% Target) ---
             worker_limits = {}
             for _, row in present_workers.iterrows():
-                # Convert times to string to ensure datetime parses them correctly
                 start_str = str(row["Start_Time"])
                 end_str = str(row["End_Time"])
                 
-                # Handle cases where Excel imports time as HH:MM:SS or just HH:MM
                 fmt = "%H:%M:%S" if len(start_str.split(":")) == 3 else "%H:%M"
                 
                 t1 = datetime.strptime(start_str, fmt)
                 t2 = datetime.strptime(end_str, fmt)
                 total_hours = (t2 - t1).total_seconds() / 3600
                 
-                # Define shift boundaries (You can tweak these hours!)
                 is_am_worker = t1.hour < 12  # Starts before noon
                 is_pm_worker = t2.hour >= 14 # Ends at 2:00 PM or later
                 
@@ -132,7 +130,6 @@ def color_categories(row):
                 
                 override_qty = min(override_qty, total_qty)
                 
-                # Grab the category if it exists, otherwise default to "General"
                 task_category = row.get("Category", "General")
                 
                 for i in range(total_qty):
@@ -141,9 +138,9 @@ def color_categories(row):
                     task_instances.append({
                         "id": f"{row['Task_Name']} #{i+1}",
                         "name": row['Task_Name'],
-                        "category": task_category, # NEW
+                        "category": task_category,
                         "duration_mins": int(row["Duration_Hours"] * 60),
-                        "priority": row["Priority"],
+                        "priority": bool(row["Priority"]),
                         "override": current_override,
                         "required_shift": row.get("Required_Shift", "Any")
                     })
@@ -154,7 +151,6 @@ def color_categories(row):
                     skill_val = skills_df.get(task["name"], pd.Series()).get(worker, False)
                     is_trained = skill_val in [True, 1, "TRUE", "True"]
                     
-                    # --- NEW: Shift Check Logic ---
                     req_shift = task["required_shift"]
                     worker_am = worker_limits[worker]["is_am"]
                     worker_pm = worker_limits[worker]["is_pm"]
@@ -164,13 +160,11 @@ def color_categories(row):
                         shift_match = False
                     if req_shift == "PM" and not worker_pm:
                         shift_match = False
-                    # ------------------------------
                     
-                    # Only create the assignment option if they are trained AND match the shift
                     if (is_trained and shift_match) or task["override"] == worker:
                         x[(worker, task["id"])] = model.NewBoolVar(f"assign_{worker}_{task['id']}")
                         
-# --- Constraint 1: One person per task ---
+            # --- Constraint 1: At most one person per task (Allows partial schedule) ---
             for task in task_instances:
                 valid_workers = [w for w in active_worker_names if (w, task["id"]) in x]
                 if task["override"] and task["override"] in valid_workers:
@@ -180,9 +174,9 @@ def color_categories(row):
                             model.Add(x[(w, task["id"])] == 0)
                 else:
                     if valid_workers:
-                        model.AddExactlyOne(x[(w, task["id"])] for w in valid_workers)
+                        model.AddAtMostOne(x[(w, task["id"])] for w in valid_workers)
 
-            # --- Constraint 2: Capacity & Balanced Distribution ---
+            # --- Constraint 2: Capacity & Soft Target Penalties ---
             objective_terms = []
             worker_total_mins = {}
             
@@ -198,15 +192,15 @@ def color_categories(row):
                     hard_limit = worker_limits[worker]["hard"]
                     target_limit = worker_limits[worker]["target"]
                     
-                    # HARD LIMIT: Cannot exceed 100% of shift
+                    # HARD LIMIT: Cannot exceed shift total
                     model.Add(total_assigned <= hard_limit)
                     
-                    # SOFT LIMIT PENALTY: Calculate minutes over 80%
+                    # SOFT LIMIT PENALTY: Penalty for work over 80%
                     over_target = model.NewIntVar(0, hard_limit, f"over_{worker}")
                     model.Add(over_target >= total_assigned - target_limit)
-                    objective_terms.append(-2 * over_target) # Heavier penalty for overload
+                    objective_terms.append(-2 * over_target)
 
-            # WORKLOAD BALANCING: Minimize variance/spread between workers' total minutes
+            # --- Workload Balancing ---
             if len(active_worker_names) > 1:
                 max_mins = model.NewIntVar(0, 1440, "max_load")
                 min_mins = model.NewIntVar(0, 1440, "min_load")
@@ -215,16 +209,16 @@ def color_categories(row):
                 if load_vars:
                     model.AddMaxEquality(max_mins, load_vars)
                     model.AddMinEquality(min_mins, load_vars)
-                    # Penalize the gap between the most-loaded and least-loaded worker
                     load_spread = model.NewIntVar(0, 1440, "load_spread")
                     model.Add(load_spread == max_mins - min_mins)
-                    objective_terms.append(-5 * load_spread) # Weight to encourage even sharing
+                    objective_terms.append(-5 * load_spread)
 
-            # Points for completing tasks (Priority vs Normal)
+            # --- Maximization Objective: Heavy Priority Weighting ---
             for worker in active_worker_names:
                 for task in task_instances:
                     if (worker, task["id"]) in x:
-                        weight = 1000 if task["priority"] else 100
+                        # Priority tasks are worth 100,000 pts; Normal tasks are worth 1,000 pts
+                        weight = 100000 if task["priority"] else 1000
                         objective_terms.append(x[(worker, task["id"])] * weight)
                         
             model.Maximize(sum(objective_terms))
@@ -236,20 +230,40 @@ def color_categories(row):
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
                 st.success("Schedule successfully optimized!")
                 results = []
-                for worker in active_worker_names:
-                    for task in task_instances:
+                unscheduled_tasks = []
+                
+                for task in task_instances:
+                    assigned = False
+                    for worker in active_worker_names:
                         if (worker, task["id"]) in x and solver.Value(x[(worker, task["id"])]) == 1:
                             results.append({
                                 "Worker": worker,
                                 "Assigned Task": task["name"],
-                                "Category": task["category"], # NEW
+                                "Category": task["category"],
                                 "Duration (Hrs)": task["duration_mins"] / 60
                             })
+                            assigned = True
+                            break
+                    if not assigned:
+                        unscheduled_tasks.append({
+                            "Task Name": task["name"],
+                            "Category": task["category"],
+                            "Priority": "Yes" if task["priority"] else "No",
+                            "Duration (Hrs)": task["duration_mins"] / 60
+                        })
                 
+                # Pop-up / Notification for unscheduled tasks
+                if unscheduled_tasks:
+                    unscheduled_df = pd.DataFrame(unscheduled_tasks)
+                    summary = unscheduled_df.groupby(["Task Name", "Category", "Priority", "Duration (Hrs)"]).size().reset_index(name="Unassigned Qty")
+                    
+                    st.warning("⚠️ **Notice: Some tasks could not be scheduled due to capacity or skill limits.**")
+                    with st.expander("📋 View List of Unscheduled Tasks", expanded=True):
+                        st.dataframe(summary, hide_index=True, use_container_width=True)
+
                 if results:
                     results_df = pd.DataFrame(results)
                     
-                    # Clean Layout: Use columns or metrics instead of endless vertical scrolling
                     st.markdown("### 📊 Shift Summary Dashboard")
                     metric_cols = st.columns(len(active_worker_names))
                     
@@ -264,19 +278,17 @@ def color_categories(row):
                     st.markdown("---")
                     st.markdown("### 📋 Individual Task Breakdown")
                     
-                    # Use tabs to organize individual views compactly
                     worker_tabs = st.tabs(active_worker_names)
                     for idx, worker in enumerate(active_worker_names):
                         with worker_tabs[idx]:
                             worker_tasks = results_df[results_df["Worker"] == worker]
                             if not worker_tasks.empty:
-                                # Apply the color-coding style to the dataframe view
                                 styled_table = worker_tasks[["Assigned Task", "Category", "Duration (Hrs)"]].style.apply(color_categories, axis=1)
                                 st.dataframe(styled_table, hide_index=True, use_container_width=True)
                             else:
                                 st.info("No tasks assigned for this shift.")
                 else:
-                    st.warning("No tasks could be assigned.")
+                    st.warning("No tasks could be assigned to any active worker.")
             else:
                 st.error("No valid schedule found. Check your manual assignments and total capacities.")
 else:
