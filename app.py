@@ -289,7 +289,11 @@ if uploaded_file is not None:
                         with worker_tabs[idx]:
                             worker_tasks = results_df[results_df["Worker"] == worker]
                             if not worker_tasks.empty:
-                                styled_table = worker_tasks[["Assigned Task", "Category", "Duration (Hrs)"]].style.apply(color_categories, axis=1)
+                                styled_table = (
+                                    worker_tasks[["Assigned Task", "Category", "Duration (Hrs)"]]
+                                    .style.apply(color_categories, axis=1)
+                                    .format({"Duration (Hrs)": "{:.1f}"})
+                                )
                                 st.dataframe(
                                     styled_table, 
                                     hide_index=True, 
