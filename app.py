@@ -37,6 +37,9 @@ if uploaded_file is not None:
     # Set the index of the skills matrix to the worker's name for easy lookup
     skills_df.set_index("Worker_Name", inplace=True)
     worker_names = workers_df["Worker_Name"].tolist()
+    
+    # Grab available skill names directly from the Skills tab column headers
+    available_skills = list(skills_df.columns)
 
     # --- 2. TOP CONTROLS ---
     st.markdown("---")
@@ -69,6 +72,7 @@ if uploaded_file is not None:
                 "Assigned_To": st.column_config.SelectboxColumn("Manual Override", options=worker_names),
                 "Override_Quantity": st.column_config.NumberColumn("Override Qty", min_value=0, step=1),
                 "Required_Shift": st.column_config.SelectboxColumn("Shift", options=["Any", "AM", "PM"]),
+                "Required_Skills": st.column_config.MultiselectColumn("Required Skills", options=available_skills),
                 "Priority": st.column_config.CheckboxColumn("Priority"),
                 "Duration_Hours": st.column_config.NumberColumn("Hours/Task", min_value=0.1, step=0.1),
                 "Default_Quantity": st.column_config.NumberColumn("Quantity Needed", min_value=0, step=1),
@@ -121,6 +125,15 @@ if uploaded_file is not None:
             for _, row in edited_tasks.iterrows():
                 total_qty = int(row["Default_Quantity"])
                 
+                # Parse required skills from Excel string or Streamlit list
+                raw_skills = row.get("Required_Skills", [])
+                if pd.isna(raw_skills):
+                    req_skills_list = []
+                elif isinstance(raw_skills, str):
+                    req_skills_list = [s.strip() for s in raw_skills.split(",") if s.strip()]
+                else:
+                    req_skills_list = list(raw_skills)
+                
                 override_worker = None
                 if "Assigned_To" in edited_tasks.columns and pd.notna(row["Assigned_To"]):
                     override_worker = row["Assigned_To"]
@@ -143,14 +156,22 @@ if uploaded_file is not None:
                         "duration_mins": int(row["Duration_Hours"] * 60),
                         "priority": bool(row["Priority"]),
                         "override": current_override,
-                        "required_shift": row.get("Required_Shift", "Any")
+                        "required_shift": row.get("Required_Shift", "Any"),
+                        "required_skills": req_skills_list
                     })
                     
             x = {}
             for worker in active_worker_names:
                 for task in task_instances:
-                    skill_val = skills_df.get(task["name"], pd.Series()).get(worker, False)
-                    is_trained = skill_val in [True, 1, "TRUE", "True"]
+                    # Check if worker has ALL required skills
+                    req_skills = task["required_skills"]
+                    if req_skills:
+                        is_trained = all(
+                            skills_df.get(skill, pd.Series()).get(worker, False) in [True, 1, "TRUE", "True", "Yes", "Y"]
+                            for skill in req_skills
+                        )
+                    else:
+                        is_trained = True  # No skills required
                     
                     req_shift = task["required_shift"]
                     worker_am = worker_limits[worker]["is_am"]
