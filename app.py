@@ -71,7 +71,8 @@ if uploaded_file is not None:
                 "Required_Shift": st.column_config.SelectboxColumn("Shift", options=["Any", "AM", "PM"]),
                 "Priority": st.column_config.CheckboxColumn("Priority"),
                 "Duration_Hours": st.column_config.NumberColumn("Hours/Task", min_value=0.1, step=0.1),
-                "Default_Quantity": st.column_config.NumberColumn("Quantity Needed", min_value=0, step=1)
+                "Default_Quantity": st.column_config.NumberColumn("Quantity Needed", min_value=0, step=1),
+                "Category": None
             },
             hide_index=True, key="task_editor", use_container_width=True,
             num_rows="dynamic"
@@ -259,7 +260,12 @@ if uploaded_file is not None:
                     
                     st.warning("⚠️ **Notice: Some tasks could not be scheduled due to capacity or skill limits.**")
                     with st.expander("📋 View List of Unscheduled Tasks", expanded=True):
-                        st.dataframe(summary, hide_index=True, use_container_width=True)
+                        st.dataframe(
+                            summary, 
+                            hide_index=True, 
+                            use_container_width=True,
+                            column_config={"Category": None}
+                        )
 
                 if results:
                     results_df = pd.DataFrame(results)
@@ -284,7 +290,12 @@ if uploaded_file is not None:
                             worker_tasks = results_df[results_df["Worker"] == worker]
                             if not worker_tasks.empty:
                                 styled_table = worker_tasks[["Assigned Task", "Category", "Duration (Hrs)"]].style.apply(color_categories, axis=1)
-                                st.dataframe(styled_table, hide_index=True, use_container_width=True)
+                                st.dataframe(
+                                    styled_table, 
+                                    hide_index=True, 
+                                    use_container_width=True,
+                                    column_config={"Category": None}
+                                )
                             else:
                                 st.info("No tasks assigned for this shift.")
                 else:
