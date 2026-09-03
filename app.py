@@ -69,7 +69,7 @@ if uploaded_file is not None:
         edited_tasks = st.data_editor(
             tasks_df,
             column_config={
-                "Assigned_To": st.column_config.SelectboxColumn("Manual Override", options=worker_names),
+                "Assigned_To": st.column_config.MultiselectColumn("Manual Override", options=worker_names),
                 "Override_Quantity": st.column_config.NumberColumn("Override Qty", min_value=0, step=1),
                 "Required_Shift": st.column_config.SelectboxColumn("Shift", options=["Any", "AM", "PM"]),
                 "Required_Skills": st.column_config.MultiselectColumn("Required Skills", options=available_skills),
@@ -125,7 +125,7 @@ if uploaded_file is not None:
             for _, row in edited_tasks.iterrows():
                 total_qty = int(row["Default_Quantity"])
                 
-                # Parse required skills from Excel string or Streamlit list
+                # 1. Parse Required Skills
                 raw_skills = row.get("Required_Skills", [])
                 if pd.isna(raw_skills):
                     req_skills_list = []
@@ -134,20 +134,34 @@ if uploaded_file is not None:
                 else:
                     req_skills_list = list(raw_skills)
                 
-                override_worker = None
-                if "Assigned_To" in edited_tasks.columns and pd.notna(row["Assigned_To"]):
-                    override_worker = row["Assigned_To"]
+                # 2. Parse Manual Override Workers
+                raw_override = row.get("Assigned_To", [])
+                if pd.isna(raw_override) or raw_override == "":
+                    override_workers = []
+                elif isinstance(raw_override, str):
+                    override_workers = [w.strip() for w in raw_override.split(",") if w.strip()]
+                else:
+                    override_workers = list(raw_override)
                 
+                # 3. Determine Override Quantity
                 override_qty = 0
                 if "Override_Quantity" in edited_tasks.columns and pd.notna(row["Override_Quantity"]):
                     override_qty = int(row["Override_Quantity"])
+                elif len(override_workers) > 0:
+                    # Quality of life: If you pick workers but forget to type a quantity, default to 1 per person
+                    override_qty = len(override_workers)
                 
                 override_qty = min(override_qty, total_qty)
                 
                 task_category = row.get("Category", "General")
                 
+                # 4. Generate Task Instances
                 for i in range(total_qty):
-                    current_override = override_worker if i < override_qty else None
+                    # Round-robin assign the override workers if within the override quantity
+                    if i < override_qty and len(override_workers) > 0:
+                        current_override = override_workers[i % len(override_workers)]
+                    else:
+                        current_override = None
                     
                     task_instances.append({
                         "id": f"{row['Task_Name']} #{i+1}",
