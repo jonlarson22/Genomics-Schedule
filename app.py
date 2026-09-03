@@ -27,7 +27,7 @@ if uploaded_file is not None:
     tasks_df = pd.read_excel(uploaded_file, sheet_name="Tasks")
     skills_df = pd.read_excel(uploaded_file, sheet_name="Skills")
     
-    # Force the empty Assigned_To column to accept text strings
+    # Force the empty Assigned_To column to accept text strings/lists
     if "Assigned_To" in tasks_df.columns:
         tasks_df["Assigned_To"] = tasks_df["Assigned_To"].astype("object")
 
@@ -134,7 +134,7 @@ if uploaded_file is not None:
                 else:
                     req_skills_list = list(raw_skills)
                 
-                # 2. Parse Manual Override Workers
+                # 2. Parse Manual Override Workers (Multi-Select List)
                 raw_override = row.get("Assigned_To", [])
                 if pd.isna(raw_override) or raw_override == "":
                     override_workers = []
@@ -148,16 +148,14 @@ if uploaded_file is not None:
                 if "Override_Quantity" in edited_tasks.columns and pd.notna(row["Override_Quantity"]):
                     override_qty = int(row["Override_Quantity"])
                 elif len(override_workers) > 0:
-                    # Quality of life: If you pick workers but forget to type a quantity, default to 1 per person
                     override_qty = len(override_workers)
                 
                 override_qty = min(override_qty, total_qty)
                 
                 task_category = row.get("Category", "General")
                 
-                # 4. Generate Task Instances
+                # 4. Generate Task Instances with Round-Robin Overrides
                 for i in range(total_qty):
-                    # Round-robin assign the override workers if within the override quantity
                     if i < override_qty and len(override_workers) > 0:
                         current_override = override_workers[i % len(override_workers)]
                     else:
