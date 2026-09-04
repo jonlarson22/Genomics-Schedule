@@ -123,7 +123,7 @@ if uploaded_file is not None:
             # --- Task Setup ---
             task_instances = []
             for _, row in edited_tasks.iterrows():
-                total_qty = int(row["Default_Quantity"])
+                total_qty = int(row["Default_Quantity"]) if pd.notna(row["Default_Quantity"]) else 0
                 
                 # 1. Parse Required Skills
                 raw_skills = row.get("Required_Skills", [])
@@ -151,10 +151,9 @@ if uploaded_file is not None:
                     override_qty = len(override_workers)
                 
                 override_qty = min(override_qty, total_qty)
-                
                 task_category = row.get("Category", "General")
                 
-                # 4. Generate Task Instances with Round-Robin Overrides
+                # 4. Generate Task Instances
                 for i in range(total_qty):
                     if i < override_qty and len(override_workers) > 0:
                         current_override = override_workers[i % len(override_workers)]
@@ -172,9 +171,12 @@ if uploaded_file is not None:
                         "required_skills": req_skills_list,
                         "min_workers": int(row.get("Min_Workers", 1) if pd.notna(row.get("Min_Workers", 1)) else 1),
                         "max_workers": int(row.get("Max_Workers", 1) if pd.notna(row.get("Max_Workers", 1)) else 1),
-                })
+                    })
                     
+            # --- Scalable Task Setup & Constraints ---
             x = {}
+            task_actual_mins = {}
+            
             for worker in active_worker_names:
                 for task in task_instances:
                     # Check if worker has ALL required skills
@@ -200,27 +202,74 @@ if uploaded_file is not None:
                     if (is_trained and shift_match) or task["override"] == worker:
                         x[(worker, task["id"])] = model.NewBoolVar(f"assign_{worker}_{task['id']}")
                         
-            # --- Constraint 1: At most one person per task (Allows partial schedule) ---
+            # Enforce Splitting Rules
             for task in task_instances:
                 valid_workers = [w for w in active_worker_names if (w, task["id"]) in x]
+                if not valid_workers:
+                    continue
+                
+                max_w = task["max_workers"]
+                min_w = task["min_workers"]
+                base_mins = task["base_duration_mins"]
+                
+                total_assigned_workers = model.NewIntVar(0, len(valid_workers), f"num_workers_{task['id']}")
+                model.Add(total_assigned_workers == sum(x[(w, task["id"])] for w in valid_workers))
+                
+                # Enforce Manual Overrides
                 if task["override"] and task["override"] in valid_workers:
                     model.Add(x[(task["override"], task["id"])] == 1)
-                    for w in valid_workers:
-                        if w != task["override"]:
-                            model.Add(x[(w, task["id"])] == 0)
-                else:
-                    if valid_workers:
-                        model.AddAtMostOne(x[(w, task["id"])] for w in valid_workers)
+                    if max_w == 1:
+                        # Prevent others from jumping on a 1-person task that has an override
+                        for w in valid_workers:
+                            if w != task["override"]:
+                                model.Add(x[(w, task["id"])] == 0)
 
-            # --- Constraint 2: Capacity & Soft Target Penalties ---
+                if max_w > 1:
+                    is_active = model.NewBoolVar(f"active_{task['id']}")
+                    model.Add(total_assigned_workers > 0).OnlyEnforceIf(is_active)
+                    model.Add(total_assigned_workers == 0).OnlyEnforceIf(is_active.Not())
+                    
+                    model.Add(total_assigned_workers >= min_w).OnlyEnforceIf(is_active)
+                    model.Add(total_assigned_workers <= max_w).OnlyEnforceIf(is_active)
+                    
+                    for worker in valid_workers:
+                        actual_time = model.NewIntVar(0, base_mins, f"time_{worker}_{task['id']}")
+                        if max_w == 2:
+                            worked_alone = model.NewBoolVar(f"alone_{worker}_{task['id']}")
+                            worked_shared = model.NewBoolVar(f"shared_{worker}_{task['id']}")
+                            
+                            model.Add(total_assigned_workers == 1).OnlyEnforceIf(worked_alone)
+                            model.Add(total_assigned_workers == 2).OnlyEnforceIf(worked_shared)
+                            
+                            model.Add(worked_alone + worked_shared == x[(worker, task["id"])])
+                            
+                            model.Add(actual_time == base_mins).OnlyEnforceIf(worked_alone)
+                            model.Add(actual_time == base_mins // 2).OnlyEnforceIf(worked_shared)
+                            model.Add(actual_time == 0).OnlyEnforceIf(x[(worker, task["id"])].Not())
+                            
+                            task_actual_mins[(worker, task["id"])] = actual_time
+                        else:
+                            model.Add(actual_time == base_mins).OnlyEnforceIf(x[(worker, task["id"])])
+                            model.Add(actual_time == 0).OnlyEnforceIf(x[(worker, task["id"])].Not())
+                            task_actual_mins[(worker, task["id"])] = actual_time
+                else:
+                    for worker in valid_workers:
+                        actual_time = model.NewIntVar(0, base_mins, f"time_{worker}_{task['id']}")
+                        model.Add(actual_time == base_mins).OnlyEnforceIf(x[(worker, task["id"])])
+                        model.Add(actual_time == 0).OnlyEnforceIf(x[(worker, task["id"])].Not())
+                        task_actual_mins[(worker, task["id"])] = actual_time
+                        
+                    model.Add(total_assigned_workers <= 1)
+
+            # --- Capacity & Soft Target Penalties ---
             objective_terms = []
             worker_total_mins = {}
             
             for worker in active_worker_names:
                 assigned_mins = []
                 for task in task_instances:
-                    if (worker, task["id"]) in x:
-                        assigned_mins.append(x[(worker, task["id"])] * task["duration_mins"])
+                    if (worker, task["id"]) in task_actual_mins:
+                        assigned_mins.append(task_actual_mins[(worker, task["id"])])
                 
                 if assigned_mins:
                     total_assigned = sum(assigned_mins)
@@ -271,21 +320,23 @@ if uploaded_file is not None:
                 for task in task_instances:
                     assigned = False
                     for worker in active_worker_names:
+                        # Grab the actual minutes solved by CP-SAT
                         if (worker, task["id"]) in x and solver.Value(x[(worker, task["id"])]) == 1:
+                            actual_solved_hrs = solver.Value(task_actual_mins[(worker, task["id"])]) / 60
                             results.append({
                                 "Worker": worker,
                                 "Assigned Task": task["name"],
                                 "Category": task["category"],
-                                "Duration (Hrs)": task["duration_mins"] / 60
+                                "Duration (Hrs)": actual_solved_hrs
                             })
                             assigned = True
-                            break
+                    
                     if not assigned:
                         unscheduled_tasks.append({
                             "Task Name": task["name"],
                             "Category": task["category"],
                             "Priority": "Yes" if task["priority"] else "No",
-                            "Duration (Hrs)": task["duration_mins"] / 60
+                            "Duration (Hrs)": task["base_duration_mins"] / 60
                         })
                 
                 # Pop-up / Notification for unscheduled tasks
