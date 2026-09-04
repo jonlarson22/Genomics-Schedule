@@ -165,12 +165,14 @@ if uploaded_file is not None:
                         "id": f"{row['Task_Name']} #{i+1}",
                         "name": row['Task_Name'],
                         "category": task_category,
-                        "duration_mins": int(row["Duration_Hours"] * 60),
+                        "base_duration_mins": int(row["Duration_Hours"] * 60),
                         "priority": bool(row["Priority"]),
                         "override": current_override,
                         "required_shift": row.get("Required_Shift", "Any"),
-                        "required_skills": req_skills_list
-                    })
+                        "required_skills": req_skills_list,
+                        "min_workers": int(row.get("Min_Workers", 1) if pd.notna(row.get("Min_Workers", 1)) else 1),
+                        "max_workers": int(row.get("Max_Workers", 1) if pd.notna(row.get("Max_Workers", 1)) else 1),
+                })
                     
             x = {}
             for worker in active_worker_names:
